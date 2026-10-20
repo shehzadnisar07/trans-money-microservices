@@ -10,21 +10,23 @@ import com.transmoney.transactionservice.entity.TransactionStatus;
 import com.transmoney.transactionservice.entity.TransactionType;
 import com.transmoney.transactionservice.event.TransactionCompletedEvent;
 import com.transmoney.transactionservice.event.TransactionInitiatedEvent;
+import com.transmoney.transactionservice.repository.IdempotencyRecordRepository;
 import com.transmoney.transactionservice.repository.TransactionRepository;
-import lombok.AllArgsConstructor;
-import lombok.Data;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.RedisTemplate;
-import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.core.KafkaTemplate;
-import org.springframework.messaging.handler.annotation.Payload;
-import org.springframework.stereotype.Service;
-
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+
+
+
+import org.springframework.stereotype.Service;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.extern.slf4j.Slf4j;
+
 
 @Data
 @AllArgsConstructor
@@ -33,6 +35,7 @@ import java.util.UUID;
 public class TransactionService {
     private final TransactionRepository transactionRepository;
     private final AccountServiceClient accountServiceClient;
+    private final IdempotencyRecordRepository idempotencyRecordRepository;
     private final KafkaTemplate<String,Object> kafkaTemplate;
 
     private final RedisTemplate<String,String> redisTemplate;
@@ -55,7 +58,11 @@ public class TransactionService {
     * @return
     * */
 
-    public TransactionResponse transfer(TransferReq req, String userEmail) {
+    public TransactionResponse transfer(
+            TransferReq req,
+            String userEmail,
+            String idempotencyKey) {
+
         log.info("SAGA STARTED: Transfer : {} -> {} amount : {}",req.getSenderAccountNumber(), req.getReceiverAccountNumber(),req.getAmount());
 
         AccountResponse senderAccount =
