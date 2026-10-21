@@ -8,10 +8,10 @@ import com.transmoney.accountservice.dto.AccountResponse;
 import com.transmoney.accountservice.dto.CreateAccountRequest;
 import com.transmoney.accountservice.repository.AccountRepository;
 import com.transmoney.accountservice.repository.DebitOperationRepository;
-import jakarta.transaction.Transactional;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.security.SecureRandom;
@@ -145,9 +145,17 @@ public class AccountService {
             throw new IllegalArgumentException("Operation id is required.");
         }
 
-        if (amount.compareTo(BigDecimal.ZERO) <= 0) {
+        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
             throw new IllegalArgumentException("Amount must be greater than zero");
         }
+
+
+        // 3. Lock the account row before checking the operation.
+        Account account = accountRepository
+                .findByAccountNumberForUpdate(accountNumber)
+                .orElseThrow(() ->
+                        new RuntimeException("Account not found")
+                );
 
 
         // Check weather this operation was already processed.
@@ -167,10 +175,6 @@ public class AccountService {
             return;
         }
 
-
-
-        Account account = accountRepository.findByAccountNumber(accountNumber)
-                .orElseThrow(()-> new RuntimeException("Account not found"));
 
         if(account.getAccountStatus()!= AccountStatus.ACTIVE){
             throw new RuntimeException("Account is not Active : " + accountNumber);
