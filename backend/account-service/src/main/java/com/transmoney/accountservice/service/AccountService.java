@@ -128,7 +128,10 @@ public class AccountService {
     * -Deduct balance form sender Account.
     * - Called by Transaction
     * */
-    public void deductBalance(String accountNumber, BigDecimal amount) {
+    public void deductBalance(
+            String accountNumber,
+            BigDecimal amount ,
+            String operationId) {
         log.info("Deduction amount of {} from Account : {}", amount, accountNumber);
 
         if (amount.compareTo(BigDecimal.ZERO) <= 0) {

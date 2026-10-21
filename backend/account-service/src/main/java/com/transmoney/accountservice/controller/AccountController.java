@@ -101,9 +101,10 @@ public class AccountController {
     @PutMapping("/{accountNumber}/deduct")
     public ResponseEntity<String> deductBalance(
             @PathVariable String accountNumber,
-            @RequestParam BigDecimal amount){
+            @RequestParam BigDecimal amount,
+            @RequestParam String operationId){
 
-        accountService.deductBalance(accountNumber,amount);
+        accountService.deductBalance(accountNumber,amount,operationId);
         return ResponseEntity.ok("AMOUNT DEDUCTED SUCCESSFULLY");
     }
 

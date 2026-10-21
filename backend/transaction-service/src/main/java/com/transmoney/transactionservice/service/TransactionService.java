@@ -14,6 +14,7 @@ import com.transmoney.transactionservice.event.TransactionInitiatedEvent;
 import com.transmoney.transactionservice.repository.IdempotencyRecordRepository;
 import com.transmoney.transactionservice.repository.TransactionRepository;
 import com.transmoney.transactionservice.utils.RequestHashUtil;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.kafka.core.KafkaTemplate;
 import java.time.LocalDateTime;
@@ -114,24 +115,59 @@ public class TransactionService {
 
         // Reserve the keys before processing:J
 
-        IdempotencyRecord idempotencyRecord = idempotencyReservationService
-                .reserve(
-                        userEmail,
-                        idempotencyKey,
-                        reqHash);
+        IdempotencyRecord idempotencyRecord ;
+        try {
+            idempotencyRecord = idempotencyReservationService.reserve(
+                    userEmail,
+                    idempotencyKey,
+                    reqHash
+            );
 
+        } catch (DataIntegrityViolationException ex) {
+
+            Optional<IdempotencyRecord> existing =
+                    idempotencyRecordRepository
+                            .findByUserEmailAndIdempotencyKey(
+                                    userEmail,
+                                    idempotencyKey
+                            );
+
+            if (existing.isPresent()) {
+                IdempotencyRecord record = existing.get();
+
+                if (!record.getReqHash().equals(reqHash)) {
+                    throw new IllegalStateException(
+                            "Idempotency key was already used with a different request."
+                    );
+                }
+
+                if (record.getTransactionId() == null) {
+                    throw new IllegalStateException(
+                            "A request with this idempotency key is already processing."
+                    );
+                }
+
+                Transaction originalTransaction =
+                        transactionRepository.findById(record.getTransactionId())
+                                .orElseThrow(() -> new IllegalStateException(
+                                        "Original transaction not found: "
+                                                + record.getTransactionId()
+                                ));
+
+                return mapToResponse(originalTransaction);
+            }
+
+            // The error wasn't explained by an existing idempotency key.
+            throw ex;
+        }
         log.info("SAGA STARTED: Transfer : {} -> {} amount : {}",req.getSenderAccountNumber(), req.getReceiverAccountNumber(),req.getAmount());
+
 
         AccountResponse senderAccount =
                 accountServiceClient.getAccount(
                         req.getSenderAccountNumber(),
                         userEmail
                 );
-
-        //SAGA STEP 1: deduct form sender account.
-        accountServiceClient.deductBalance(
-                req.getSenderAccountNumber(),
-                req.getAmount());
 
         Transaction transaction = new Transaction();
         transaction.setSenderAccountNumber(req.getSenderAccountNumber());
@@ -147,6 +183,14 @@ public class TransactionService {
         // saved transactionId to idempotency record:
         idempotencyRecord.setTransactionId(savedTransaction.getId());
         idempotencyRecordRepository.save(idempotencyRecord);
+
+
+        //SAGA STEP 1: deduct form sender account.
+        accountServiceClient.deductBalance(
+                req.getSenderAccountNumber(),
+                req.getAmount(),
+                savedTransaction.getId());
+
         log.info("Transaction saved as PROCESSING: {} ",transaction.getId());
 
 
