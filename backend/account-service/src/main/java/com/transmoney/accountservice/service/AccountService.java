@@ -145,6 +145,11 @@ public class AccountService {
             throw new IllegalArgumentException("Operation id is required.");
         }
 
+        // Add check
+        if (accountNumber == null || accountNumber.isBlank()) {
+            throw new IllegalArgumentException("Account number is required.");
+        }
+
         if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
             throw new IllegalArgumentException("Amount must be greater than zero");
         }

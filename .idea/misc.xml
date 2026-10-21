@@ -6,6 +6,10 @@
       <list>
         <option value="$PROJECT_DIR$/backend/transaction-service/pom.xml" />
         <option value="$PROJECT_DIR$/backend/account-service/pom.xml" />
+        <option value="$PROJECT_DIR$/backend/api-gateway/pom.xml" />
+        <option value="$PROJECT_DIR$/backend/auth-service/pom.xml" />
+        <option value="$PROJECT_DIR$/backend/fraud-detection-service/pom.xml" />
+        <option value="$PROJECT_DIR$/backend/notification-service/pom.xml" />
       </list>
     </option>
   </component>
