@@ -5,6 +5,7 @@ import com.transmoney.transactionservice.client.AccountServiceClient;
 import com.transmoney.transactionservice.dto.AccountResponse;
 import com.transmoney.transactionservice.dto.TransactionResponse;
 import com.transmoney.transactionservice.dto.TransferReq;
+import com.transmoney.transactionservice.entity.IdempotencyRecord;
 import com.transmoney.transactionservice.entity.Transaction;
 import com.transmoney.transactionservice.entity.TransactionStatus;
 import com.transmoney.transactionservice.entity.TransactionType;
@@ -12,14 +13,11 @@ import com.transmoney.transactionservice.event.TransactionCompletedEvent;
 import com.transmoney.transactionservice.event.TransactionInitiatedEvent;
 import com.transmoney.transactionservice.repository.IdempotencyRecordRepository;
 import com.transmoney.transactionservice.repository.TransactionRepository;
+import com.transmoney.transactionservice.utils.RequestHashUtil;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.kafka.core.KafkaTemplate;
 import java.time.LocalDateTime;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
-
+import java.util.*;
 
 
 import org.springframework.stereotype.Service;
@@ -63,6 +61,66 @@ public class TransactionService {
             String userEmail,
             String idempotencyKey) {
 
+        // validate idempotency Key:
+        if(idempotencyKey==null|| idempotencyKey.isBlank()){
+            throw new RuntimeException("Idempotency Key is required");
+        }
+
+        // Generate request data to be hashed:
+        String reqData = String.join("|",
+                req.getSenderAccountNumber(),
+                req.getReceiverAccountNumber(),
+                req.getAmount().toString(),
+                req.getDescription()==null?"":req.getDescription()
+        );
+
+        //Generating hash value by calling RequestHashUtil.
+        String reqHash = RequestHashUtil.generateHash(reqData);
+
+        //Check weather the user already used this key:
+
+        Optional<IdempotencyRecord> existingRecord =
+                idempotencyRecordRepository.findByUserEmailAndIdempotencyKey(
+                        userEmail,
+                        idempotencyKey);
+
+        if(existingRecord.isPresent()){
+            IdempotencyRecord idempotencyRecord = existingRecord.get();
+
+            //1. Reject reuse of same key for different request:
+            if(!idempotencyRecord.getReqHash().equals(reqHash)){
+                throw new RuntimeException("Idempotency key was already used with different request:");
+            }
+
+            // 2. Handle an existing request without a transaction ID
+            if (idempotencyRecord.getTransactionId() == null) {
+                throw new IllegalStateException(
+                        "A request with this idempotency key is already processing"
+                );
+            }
+
+            //3. Returning the original transaction record not deduct again.
+            Transaction originalTransaction = transactionRepository
+                    .findById(idempotencyRecord.getTransactionId())
+                    .orElseThrow(()-> new IllegalStateException(
+                            "Original transaction not found with id :" +
+                                    idempotencyRecord.getTransactionId()
+                    ));
+
+            return mapToResponse(originalTransaction);
+
+        }
+
+        // Reserve the keys before processing:J
+
+        IdempotencyRecord idempotencyRecord = new IdempotencyRecord();
+        idempotencyRecord.setUserEmail(userEmail);
+        idempotencyRecord.setIdempotencyKey(idempotencyKey);
+        idempotencyRecord.setReqHash(reqHash);
+        idempotencyRecord.setStatus("PROCESSING");
+
+        idempotencyRecordRepository.saveAndFlush(idempotencyRecord);
+
         log.info("SAGA STARTED: Transfer : {} -> {} amount : {}",req.getSenderAccountNumber(), req.getReceiverAccountNumber(),req.getAmount());
 
         AccountResponse senderAccount =
@@ -86,6 +144,10 @@ public class TransactionService {
         transaction.setReferenceNumber(UUID.randomUUID().toString());
 
         Transaction savedTransaction = transactionRepository.save(transaction);
+
+        // saved transactionId to idempotency record:
+        idempotencyRecord.setTransactionId(savedTransaction.getId());
+        idempotencyRecordRepository.save(idempotencyRecord);
         log.info("Transaction saved as PROCESSING: {} ",transaction.getId());
 
 
