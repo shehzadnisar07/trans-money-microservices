@@ -3,15 +3,19 @@ package com.transmoney.accountservice.service;
 import com.transmoney.accountservice.Entity.Account;
 import com.transmoney.accountservice.Entity.AccountStatus;
 import com.transmoney.accountservice.Entity.AccountType;
+import com.transmoney.accountservice.Entity.DebitOperation;
 import com.transmoney.accountservice.dto.AccountResponse;
 import com.transmoney.accountservice.dto.CreateAccountRequest;
 import com.transmoney.accountservice.repository.AccountRepository;
+import com.transmoney.accountservice.repository.DebitOperationRepository;
+import jakarta.transaction.Transactional;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.security.SecureRandom;
+import java.util.Optional;
 
 @Service
 @Slf4j
@@ -19,6 +23,7 @@ import java.security.SecureRandom;
 
 public class AccountService {
     private final AccountRepository accountRepository;
+    private final DebitOperationRepository debitOperationRepository;
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
     /*
@@ -128,11 +133,35 @@ public class AccountService {
     * -Deduct balance form sender Account.
     * - Called by Transaction
     * */
+    @Transactional
     public void deductBalance(
             String accountNumber,
             BigDecimal amount ,
             String operationId) {
+
         log.info("Deduction amount of {} from Account : {}", amount, accountNumber);
+
+        if(operationId == null || operationId.isBlank()){
+            throw new IllegalArgumentException("Operation id is required.");
+        }
+
+        // Check weather this operation was already processed.
+
+        Optional<DebitOperation> existingOperation = debitOperationRepository
+                .findByOperationId(operationId);
+
+        if(existingOperation.isPresent()){
+
+            DebitOperation previous = existingOperation.get();
+
+            // A repeated ID must refer to the same request.
+            if(!previous.getAccountNumber().equals(accountNumber)|| previous.getAmount().compareTo(amount) != 0){
+                throw new IllegalArgumentException("Operation id was already used for different debit.");
+            }
+
+            log.info("Debit operation {} was already processed", operationId);
+            return;
+        }
 
         if (amount.compareTo(BigDecimal.ZERO) <= 0) {
             throw new IllegalArgumentException("Amount must be greater than zero");
@@ -148,6 +177,14 @@ public class AccountService {
         if(account.getBalance().compareTo(amount)<0){
             throw new RuntimeException("Insufficient balance for this transaction : " + accountNumber);
         }
+
+        // Record the operation.
+        DebitOperation operation = new DebitOperation();
+        operation.setOperationId(operationId);
+        operation.setAccountNumber(accountNumber);
+        operation.setAmount(amount);
+
+        debitOperationRepository.save(operation);
 
         account.setBalance(account.getBalance().subtract(amount));
 
