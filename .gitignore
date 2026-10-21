@@ -8,6 +8,8 @@ Thumbs.db
 
 # ── IDE ───────────────────────────────────────────────────
 .idea/
+**/.idea/
+**/workspace.xml
 *.iml
 *.iws
 *.ipr

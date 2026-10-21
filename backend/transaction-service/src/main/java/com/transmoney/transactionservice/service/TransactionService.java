@@ -1,6 +1,5 @@
 package com.transmoney.transactionservice.service;
 
-
 import com.transmoney.transactionservice.client.AccountServiceClient;
 import com.transmoney.transactionservice.dto.AccountResponse;
 import com.transmoney.transactionservice.dto.TransactionResponse;
@@ -14,18 +13,18 @@ import com.transmoney.transactionservice.event.TransactionInitiatedEvent;
 import com.transmoney.transactionservice.repository.IdempotencyRecordRepository;
 import com.transmoney.transactionservice.repository.TransactionRepository;
 import com.transmoney.transactionservice.utils.RequestHashUtil;
-import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.data.redis.core.RedisTemplate;
-import org.springframework.kafka.core.KafkaTemplate;
-import java.time.LocalDateTime;
-import java.util.*;
-
-
-import org.springframework.stereotype.Service;
+import feign.FeignException;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.stereotype.Service;
 
+import java.time.LocalDateTime;
+import java.util.*;
 
 @Data
 @AllArgsConstructor
@@ -36,35 +35,27 @@ public class TransactionService {
     private final AccountServiceClient accountServiceClient;
     private final IdempotencyRecordRepository idempotencyRecordRepository;
     private final IdempotencyReservationService idempotencyReservationService;
-    private final KafkaTemplate<String,Object> kafkaTemplate;
-
-    private final RedisTemplate<String,String> redisTemplate;
+    private final KafkaTemplate<String, Object> kafkaTemplate;
+    private final RedisTemplate<String, String> redisTemplate;
 
     private final String TRANSACTION_INITIATED_TOPIC = "transaction.initiated";
     private final String TRANSACTION_COMPLETED_TOPIC = "transaction.completed";
     private final String TRANSACTION_REFUNDED_TOPIC = "transaction.refunded";
     private final String FRAUD_DETECTED_TOPIC = "fraud.detected";
 
-
-
-
     /*
-    * SAGA STEP -1: Initiate transfer
-    * Deduct from sender account via feign
-    * Saves transaction as PROCESSING
-    * Publish event to Kafka for fraud check
-    * Return
-    * @param request
-    * @return
-    * */
-
+     * SAGA STEP -1: Initiate transfer
+     * Deduct from sender account via feign
+     * Saves transaction as PROCESSING
+     * Publish event to Kafka for fraud check
+     */
     public TransactionResponse transfer(
             TransferReq req,
             String userEmail,
             String idempotencyKey) {
 
         // validate idempotency Key:
-        if(idempotencyKey==null|| idempotencyKey.isBlank()){
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
             throw new RuntimeException("Idempotency Key is required");
         }
 
@@ -73,24 +64,23 @@ public class TransactionService {
                 req.getSenderAccountNumber(),
                 req.getReceiverAccountNumber(),
                 req.getAmount().toString(),
-                req.getDescription()==null?"":req.getDescription()
+                req.getDescription() == null ? "" : req.getDescription()
         );
 
-        //Generating hash value by calling RequestHashUtil.
+        // Generating hash value by calling RequestHashUtil.
         String reqHash = RequestHashUtil.generateHash(reqData);
 
-        //Check weather the user already used this key:
-
+        // Check whether the user already used this key:
         Optional<IdempotencyRecord> existingRecord =
                 idempotencyRecordRepository.findByUserEmailAndIdempotencyKey(
                         userEmail,
                         idempotencyKey);
 
-        if(existingRecord.isPresent()){
+        if (existingRecord.isPresent()) {
             IdempotencyRecord idempotencyRecord = existingRecord.get();
 
-            //1. Reject reuse of same key for different request:
-            if(!idempotencyRecord.getReqHash().equals(reqHash)){
+            // 1. Reject reuse of same key for different request:
+            if (!idempotencyRecord.getReqHash().equals(reqHash)) {
                 throw new RuntimeException("Idempotency key was already used with different request:");
             }
 
@@ -101,30 +91,26 @@ public class TransactionService {
                 );
             }
 
-            //3. Returning the original transaction record not deduct again.
+            // 3. Returning the original transaction record not deduct again.
             Transaction originalTransaction = transactionRepository
                     .findById(idempotencyRecord.getTransactionId())
-                    .orElseThrow(()-> new IllegalStateException(
+                    .orElseThrow(() -> new IllegalStateException(
                             "Original transaction not found with id :" +
                                     idempotencyRecord.getTransactionId()
                     ));
 
             return mapToResponse(originalTransaction);
-
         }
 
-        // Reserve the keys before processing:J
-
-        IdempotencyRecord idempotencyRecord ;
+        // Reserve the keys before processing:
+        IdempotencyRecord idempotencyRecord;
         try {
             idempotencyRecord = idempotencyReservationService.reserve(
                     userEmail,
                     idempotencyKey,
                     reqHash
             );
-
         } catch (DataIntegrityViolationException ex) {
-
             Optional<IdempotencyRecord> existing =
                     idempotencyRecordRepository
                             .findByUserEmailAndIdempotencyKey(
@@ -160,14 +146,22 @@ public class TransactionService {
             // The error wasn't explained by an existing idempotency key.
             throw ex;
         }
-        log.info("SAGA STARTED: Transfer : {} -> {} amount : {}",req.getSenderAccountNumber(), req.getReceiverAccountNumber(),req.getAmount());
 
+        log.info("SAGA STARTED: Transfer : {} -> {} amount : {}", req.getSenderAccountNumber(), req.getReceiverAccountNumber(), req.getAmount());
 
-        AccountResponse senderAccount =
-                accountServiceClient.getAccount(
-                        req.getSenderAccountNumber(),
-                        userEmail
-                );
+        AccountResponse senderAccount;
+        try {
+            senderAccount = accountServiceClient.getAccount(
+                    req.getSenderAccountNumber(),
+                    userEmail
+            );
+        } catch (FeignException.Forbidden e) {
+            throw new AccessDeniedException("Access denied");
+        }
+
+        if (senderAccount == null || senderAccount.getEmail() == null || !senderAccount.getEmail().equalsIgnoreCase(userEmail)) {
+            throw new AccessDeniedException("Access denied");
+        }
 
         Transaction transaction = new Transaction();
         transaction.setSenderAccountNumber(req.getSenderAccountNumber());
@@ -184,17 +178,15 @@ public class TransactionService {
         idempotencyRecord.setTransactionId(savedTransaction.getId());
         idempotencyRecordRepository.save(idempotencyRecord);
 
-
-        //SAGA STEP 1: deduct form sender account.
+        // SAGA STEP 1: deduct from sender account.
         accountServiceClient.deductBalance(
                 req.getSenderAccountNumber(),
                 req.getAmount(),
                 savedTransaction.getId());
 
-        log.info("Transaction saved as PROCESSING: {} ",transaction.getId());
+        log.info("Transaction saved as PROCESSING: {} ", transaction.getId());
 
-
-        //SAGA STEP 2 -Publish for fraud check
+        // SAGA STEP 2 - Publish for fraud check
         TransactionInitiatedEvent event = new TransactionInitiatedEvent(
                 savedTransaction.getId(),
                 savedTransaction.getSenderAccountNumber(),
@@ -202,13 +194,10 @@ public class TransactionService {
                 savedTransaction.getAmount(),
                 savedTransaction.getDescription());
 
-        kafkaTemplate.send(TRANSACTION_INITIATED_TOPIC,event.getTransactionId(),event);
-        log.info("SAGA STEP 2 -> transactionInitiatedEven published : {} ",savedTransaction.getId());
-
+        kafkaTemplate.send(TRANSACTION_INITIATED_TOPIC, event.getTransactionId(), event);
+        log.info("SAGA STEP 2 -> transactionInitiatedEvent published : {} ", savedTransaction.getId());
 
         return mapToResponse(savedTransaction);
-
-
     }
 
     private TransactionResponse mapToResponse(Transaction savedTransaction) {
@@ -226,131 +215,147 @@ public class TransactionService {
         response.setCompletedAt(savedTransaction.getCompletedAt());
 
         return response;
-
     }
 
+    private boolean isAccountOwnedByUser(String accountNumber, String userEmail) {
+        if (accountNumber == null || userEmail == null || userEmail.isBlank()) {
+            return false;
+        }
+        try {
+            AccountResponse account = accountServiceClient.getAccount(accountNumber, userEmail);
+            return account != null && account.getEmail() != null && account.getEmail().equalsIgnoreCase(userEmail);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    public TransactionResponse getTransaction(String transactionId, String userEmail) {
+        Transaction transaction = transactionRepository.findById(transactionId)
+                .orElseThrow(() -> new AccessDeniedException("Access denied"));
+
+        boolean isSender = isAccountOwnedByUser(transaction.getSenderAccountNumber(), userEmail);
+        boolean isReceiver = !isSender && isAccountOwnedByUser(transaction.getReceiverAccountNumber(), userEmail);
+
+        if (!isSender && !isReceiver) {
+            throw new AccessDeniedException("Access denied");
+        }
+
+        return mapToResponse(transaction);
+    }
 
     public TransactionResponse getTransaction(String transactionId) {
-
-        return mapToResponse(transactionRepository.findById(transactionId)
-                .orElseThrow(()-> new RuntimeException("Transaction Not found.")));
-
+        return getTransaction(transactionId, null);
     }
 
-    public List<TransactionResponse> getTransactionHistory(String accountNumber) {
+    public List<TransactionResponse> getTransactionHistory(String accountNumber, String userEmail) {
+        if (!isAccountOwnedByUser(accountNumber, userEmail)) {
+            throw new AccessDeniedException("Access denied");
+        }
 
         return transactionRepository.findBySenderAccountNumberOrReceiverAccountNumberOrderByCreatedAtDesc(accountNumber, accountNumber)
                 .stream()
                 .map(this::mapToResponse)
                 .toList();
-
     }
 
-    public TransactionResponse verifyOTP(String transactionId, String otp) {
-        log.info("Verifying the otp to continue transaction : {}.",transactionId);
+    public List<TransactionResponse> getTransactionHistory(String accountNumber) {
+        return getTransactionHistory(accountNumber, null);
+    }
+
+    public TransactionResponse verifyOTP(String transactionId, String otp, String userEmail) {
+        log.info("Verifying the otp to continue transaction : {}.", transactionId);
 
         Transaction transaction = transactionRepository.findById(transactionId)
-                .orElseThrow(()-> new RuntimeException("transaction not found :  " + transactionId));
+                .orElseThrow(() -> new AccessDeniedException("Access denied"));
 
-        // NEW: OTP should only be accepted when the transaction
-        // is actually waiting for OTP verification.
-        if (transaction.getStatus() != TransactionStatus.PENDING_VERIFICATION) {
-            throw new RuntimeException(
-                    "Transaction is not waiting for OTP verification."
-            );
+        // Reject unauthorized users before checking transaction state or Redis OTP
+        if (!isAccountOwnedByUser(transaction.getSenderAccountNumber(), userEmail)) {
+            throw new AccessDeniedException("Access denied");
         }
 
-        //Fetch opt value from redis :
-        String otpkey = "verification-otp:"+transactionId;
+        // OTP should only be accepted when the transaction is actually waiting for OTP verification.
+        if (transaction.getStatus() != TransactionStatus.PENDING_VERIFICATION) {
+            throw new RuntimeException("Transaction is not waiting for OTP verification.");
+        }
+
+        // Fetch OTP value from Redis:
+        String otpkey = "verification-otp:" + transactionId;
         String redisOtp = redisTemplate.opsForValue().get(otpkey);
 
-        if(redisOtp==null){
-            log.warn("OTP expired for transaction : {}",transactionId);
-            compensateTransaction(transaction,"OTP was expired -transaction cancelled and amount refunded.");
+        if (redisOtp == null) {
+            log.warn("OTP expired for transaction : {}", transactionId);
+            compensateTransaction(transaction, "OTP was expired -transaction cancelled and amount refunded.");
 
             return mapToResponse(transaction);
         }
 
-        if(!redisOtp.equals(otp)){
-            log.warn("Wrong OTP -Blocking account and refunding : {} ",transactionId);
+        if (!redisOtp.equals(otp)) {
+            log.warn("Wrong OTP -Blocking account and refunding : {} ", transactionId);
             redisTemplate.delete(otpkey);
             blockAccountAndCompensate(transaction,
                     "Wrong OTP entered -transaction cancelled." +
-                    "Account Block for security.");
+                            "Account Block for security.");
 
             return mapToResponse(transaction);
-
         }
 
-        //OTP correct -complete transaction.
-        log.info("OTP verified -transaction is completing : {}",transactionId);
+        // OTP correct - complete transaction.
+        log.info("OTP verified -transaction is completing : {}", transactionId);
         redisTemplate.delete(otpkey);
         completeTransaction(transaction);
 
         return mapToResponse(transaction);
     }
 
+    public TransactionResponse verifyOTP(String transactionId, String otp) {
+        return verifyOTP(transactionId, otp, null);
+    }
 
     private void compensateTransaction(Transaction transaction, String reason) {
         log.warn(
                 "SAGA compensation -refunding amount of {} in account : {}",
-                transaction.getAmount(),transaction.getSenderAccountNumber());
+                transaction.getAmount(), transaction.getSenderAccountNumber());
 
-        //Money credit back to sender account
-        accountServiceClient.creditBalance(transaction.getSenderAccountNumber(),transaction.getAmount());
+        // Money credit back to sender account
+        accountServiceClient.creditBalance(transaction.getSenderAccountNumber(), transaction.getAmount());
         transaction.setStatus(TransactionStatus.FLAGGED);
         transaction.setFailureReason(reason + "SAGA -compensation completed, amount refunded at : " + LocalDateTime.now());
 
-        //Save changes to repo as well.
+        // Save changes to repo as well.
         transactionRepository.save(transaction);
 
+        // Publish refund event - Notification will alert user.
+        Map<String, Object> refundEvent = new HashMap<>();
+        refundEvent.put("transactionId", transaction.getId());
+        refundEvent.put("senderAccountNumber", transaction.getSenderAccountNumber());
+        refundEvent.put("amount", transaction.getAmount());
+        refundEvent.put("reason", reason);
 
-        //Publish refund event -Notificaiton will alert user.
+        kafkaTemplate.send(TRANSACTION_REFUNDED_TOPIC, transaction.getId(), refundEvent);
 
-        Map<String,Object> refundEvent = new HashMap<>();
-        refundEvent.put("transactionId",transaction.getId());
-        refundEvent.put("senderAccountNumber",transaction.getSenderAccountNumber());
-        refundEvent.put("amount",transaction.getAmount());
-        refundEvent.put("reason",reason);
-
-        kafkaTemplate.send(TRANSACTION_REFUNDED_TOPIC,transaction.getId(),refundEvent);
-
-        log.info("Compensation completed : {} refunded to : {}",transaction.getAmount(),transaction.getSenderAccountNumber());
-
-
-
+        log.info("Compensation completed : {} refunded to : {}", transaction.getAmount(), transaction.getSenderAccountNumber());
     }
 
     private void blockAccountAndCompensate(Transaction transaction, String reason) {
+        // 1- Publish fraud.detected event - account service will block account.
+        Map<String, Object> fraudDetected = new HashMap<>();
+        fraudDetected.put("transactionId", transaction.getId());
+        fraudDetected.put("senderAccountNumber", transaction.getSenderAccountNumber());
+        fraudDetected.put("amount", transaction.getAmount());
+        fraudDetected.put("reason", reason);
 
+        kafkaTemplate.send(FRAUD_DETECTED_TOPIC, transaction.getId(), fraudDetected);
 
-        //1- Publish fraud.detected event -account service will block account.
-
-        Map<String,Object> fraudDetected = new HashMap<>();
-        fraudDetected.put("transactionId",transaction.getId());
-        fraudDetected.put("senderAccountNumber",transaction.getSenderAccountNumber());
-        fraudDetected.put("amount",transaction.getAmount());
-        fraudDetected.put("reason",reason);
-
-        kafkaTemplate.send(FRAUD_DETECTED_TOPIC,transaction.getId(),fraudDetected);
-
-        //It will refund the sender and save it .
-        compensateTransaction(transaction,reason);
-
-
-
+        // It will refund the sender and save it.
+        compensateTransaction(transaction, reason);
     }
-
-
 
     private void completeTransaction(Transaction transaction) {
         /*
-        * 1- set Transaction.Status as "COMPLETED"
-        * 2- set Transaction.completed time
-        * 3- save transaction to db.
-        *
-        * */
-
+         * 1- set Transaction.Status as "COMPLETED"
+         * 2- set Transaction.completed time
+         * 3- save transaction to db.
+         */
         transaction.setStatus(TransactionStatus.COMPLETED);
         transaction.setCompletedAt(LocalDateTime.now());
         transactionRepository.save(transaction);
@@ -362,39 +367,20 @@ public class TransactionService {
                 transaction.getAmount(),
                 transaction.getDescription());
 
-        kafkaTemplate.send(TRANSACTION_COMPLETED_TOPIC,transaction.getId(),transactionCompletedEvent);
+        kafkaTemplate.send(TRANSACTION_COMPLETED_TOPIC, transaction.getId(), transactionCompletedEvent);
 
-        log.info("Transaction COMPLETED - Transaction {} completed.",transaction.getId());
+        log.info("Transaction COMPLETED - Transaction {} completed.", transaction.getId());
     }
 
-
     public void processCleanResult(String transactionId) {
-
         Transaction transaction = transactionRepository.findById(transactionId)
-                .orElseThrow(()-> new RuntimeException("Transaction not found " + transactionId));
+                .orElseThrow(() -> new RuntimeException("Transaction not found " + transactionId));
 
-        /*
-         * -if transaction has other status except "PROCESSING".
-         * -Then shouldn't proceed further and return or exit.
-         * */
-        if(transaction.getStatus()!= TransactionStatus.PROCESSING){
-            log.info("Transaction -> {} not PROCESSING - Skipping",transactionId);
+        if (transaction.getStatus() != TransactionStatus.PROCESSING) {
+            log.info("Transaction -> {} not PROCESSING - Skipping", transactionId);
             return;
         }
 
         completeTransaction(transaction);
-
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-

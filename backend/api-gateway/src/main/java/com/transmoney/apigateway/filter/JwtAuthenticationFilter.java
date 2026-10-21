@@ -1,7 +1,7 @@
 package com.transmoney.apigateway.filter;
 
 import com.transmoney.apigateway.service.JwtService;
-import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -16,35 +16,46 @@ import reactor.core.publisher.Mono;
 import java.util.Collections;
 
 @Component
-@RequiredArgsConstructor
 public class JwtAuthenticationFilter implements WebFilter {
 
     private final JwtService jwtService;
+    private final String gatewayAuthToken;
+
+    public JwtAuthenticationFilter(
+            JwtService jwtService,
+            @Value("${gateway.auth.token}") String gatewayAuthToken) {
+        this.jwtService = jwtService;
+        this.gatewayAuthToken = gatewayAuthToken;
+    }
 
     @Override
     public Mono<Void> filter(
             ServerWebExchange exchange,
             WebFilterChain chain) {
 
+        // Strip sensitive internal/identity headers from any client request
+        ServerWebExchange sanitizedExchange = exchange.mutate()
+                .request(builder -> builder.headers(headers -> {
+                    headers.remove("X-User-Email");
+                    headers.remove("X-Gateway-Token");
+                    headers.remove("X-Internal-Service-Token");
+                }))
+                .build();
+
         String authHeader =
-                exchange.getRequest()
+                sanitizedExchange.getRequest()
                         .getHeaders()
                         .getFirst(HttpHeaders.AUTHORIZATION);
 
-        if (authHeader == null ||
-                !authHeader.startsWith("Bearer ")) {
-
-            return chain.filter(exchange);
+        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+            return chain.filter(sanitizedExchange);
         }
 
         String token = authHeader.substring(7);
 
         if (!jwtService.isTokenValid(token)) {
-
-            exchange.getResponse()
-                    .setStatusCode(HttpStatus.UNAUTHORIZED);
-
-            return exchange.getResponse().setComplete();
+            sanitizedExchange.getResponse().setStatusCode(HttpStatus.UNAUTHORIZED);
+            return sanitizedExchange.getResponse().setComplete();
         }
 
         String email = jwtService.extractEmail(token);
@@ -56,16 +67,17 @@ public class JwtAuthenticationFilter implements WebFilter {
                         Collections.emptyList()
                 );
 
-        ServerWebExchange modifiedExchange =
-                exchange.mutate()
+        ServerWebExchange authenticatedExchange =
+                sanitizedExchange.mutate()
                         .request(request -> request
                                 .headers(headers -> {
-                                    headers.remove("X-User-Email");
-                                    headers.add("X-User-Email", email);
+                                    headers.set("X-User-Email", email);
+                                    headers.set("X-Gateway-Token", gatewayAuthToken);
+                                    headers.remove("X-Internal-Service-Token");
                                 }))
                         .build();
 
-        return chain.filter(modifiedExchange)
+        return chain.filter(authenticatedExchange)
                 .contextWrite(
                         ReactiveSecurityContextHolder
                                 .withAuthentication(authentication)

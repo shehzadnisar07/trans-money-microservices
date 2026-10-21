@@ -59,3 +59,7 @@ management:
 
 jwt:
   secret: ${JWT_SECRET}
+
+gateway:
+  auth:
+    token: ${GATEWAY_AUTH_TOKEN:transmoney-local-dev-gateway-auth-token-2026}

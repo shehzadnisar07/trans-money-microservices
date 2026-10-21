@@ -34,6 +34,12 @@ public class SecurityConfig {
                                 "/api/v1/auth/register",
                                 "/api/v1/auth/login"
                         ).permitAll()
+                        .pathMatchers(
+                                "/api/v1/accounts/*/credit",
+                                "/api/v1/accounts/*/deduct",
+                                "/api/v1/accounts/*/block",
+                                "/api/v1/accounts/*/balance"
+                        ).denyAll()
                         .anyExchange().authenticated()
                 )
                 .build();
@@ -44,7 +50,7 @@ public class SecurityConfig {
         CorsConfiguration configuration = new CorsConfiguration();
         configuration.setAllowedOrigins(Arrays.asList("http://localhost:5173", "http://localhost:5174", "http://localhost:3000"));
         configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"));
-        configuration.setAllowedHeaders(Arrays.asList("Authorization", "Content-Type", "Idempotency-Key", "X-User-Email"));
+        configuration.setAllowedHeaders(Arrays.asList("Authorization", "Content-Type", "Idempotency-Key"));
         configuration.setAllowCredentials(true);
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", configuration);

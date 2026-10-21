@@ -42,3 +42,11 @@ management:
     web:
       exposure:
         include: health, info
+
+gateway:
+  auth:
+    token: ${GATEWAY_AUTH_TOKEN:transmoney-local-dev-gateway-auth-token-2026}
+
+internal:
+  service:
+    token: ${INTERNAL_SERVICE_TOKEN:transmoney-local-dev-internal-service-token-2026}
