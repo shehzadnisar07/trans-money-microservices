@@ -34,6 +34,7 @@ public class TransactionService {
     private final TransactionRepository transactionRepository;
     private final AccountServiceClient accountServiceClient;
     private final IdempotencyRecordRepository idempotencyRecordRepository;
+    private final IdempotencyReservationService idempotencyReservationService;
     private final KafkaTemplate<String,Object> kafkaTemplate;
 
     private final RedisTemplate<String,String> redisTemplate;
@@ -113,13 +114,11 @@ public class TransactionService {
 
         // Reserve the keys before processing:J
 
-        IdempotencyRecord idempotencyRecord = new IdempotencyRecord();
-        idempotencyRecord.setUserEmail(userEmail);
-        idempotencyRecord.setIdempotencyKey(idempotencyKey);
-        idempotencyRecord.setReqHash(reqHash);
-        idempotencyRecord.setStatus("PROCESSING");
-
-        idempotencyRecordRepository.saveAndFlush(idempotencyRecord);
+        IdempotencyRecord idempotencyRecord = idempotencyReservationService
+                .reserve(
+                        userEmail,
+                        idempotencyKey,
+                        reqHash);
 
         log.info("SAGA STARTED: Transfer : {} -> {} amount : {}",req.getSenderAccountNumber(), req.getReceiverAccountNumber(),req.getAmount());
 
