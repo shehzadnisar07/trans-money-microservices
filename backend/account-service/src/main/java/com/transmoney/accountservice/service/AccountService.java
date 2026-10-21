@@ -139,14 +139,18 @@ public class AccountService {
             BigDecimal amount ,
             String operationId) {
 
-        log.info("Deduction amount of {} from Account : {}", amount, accountNumber);
+        log.info("Deduction amount of {} from Account : {} Debit operation id : {} ", amount, accountNumber,operationId);
 
         if(operationId == null || operationId.isBlank()){
             throw new IllegalArgumentException("Operation id is required.");
         }
 
-        // Check weather this operation was already processed.
+        if (amount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("Amount must be greater than zero");
+        }
 
+
+        // Check weather this operation was already processed.
         Optional<DebitOperation> existingOperation = debitOperationRepository
                 .findByOperationId(operationId);
 
@@ -163,9 +167,7 @@ public class AccountService {
             return;
         }
 
-        if (amount.compareTo(BigDecimal.ZERO) <= 0) {
-            throw new IllegalArgumentException("Amount must be greater than zero");
-        }
+
 
         Account account = accountRepository.findByAccountNumber(accountNumber)
                 .orElseThrow(()-> new RuntimeException("Account not found"));
