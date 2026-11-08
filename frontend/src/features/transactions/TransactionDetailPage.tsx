@@ -91,12 +91,16 @@ export const TransactionDetailPage = () => {
               <dd className="mt-1.5 text-sm text-navy font-medium font-mono">{transaction.referenceNumber || 'N/A'}</dd>
             </div>
             <div className="sm:col-span-1">
-              <dt className="text-sm font-medium text-muted">From Account</dt>
-              <dd className="mt-1.5 text-sm text-navy font-medium font-mono">{transaction.senderAccountNumber}</dd>
+              <dt className="text-sm font-medium text-muted">From</dt>
+              <dd className="mt-1.5 text-sm text-navy font-medium">
+                {transaction.senderName ? `${transaction.senderName} (${transaction.senderAccountNumber})` : transaction.senderAccountNumber}
+              </dd>
             </div>
             <div className="sm:col-span-1">
-              <dt className="text-sm font-medium text-muted">To Account</dt>
-              <dd className="mt-1.5 text-sm text-navy font-medium font-mono">{transaction.receiverAccountNumber}</dd>
+              <dt className="text-sm font-medium text-muted">To</dt>
+              <dd className="mt-1.5 text-sm text-navy font-medium">
+                {transaction.receiverName ? `${transaction.receiverName} (${transaction.receiverAccountNumber})` : transaction.receiverAccountNumber}
+              </dd>
             </div>
             
             {transaction.description && (

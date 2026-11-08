@@ -247,6 +247,9 @@ export const DashboardPage = () => {
             <ul className="divide-y divide-border flex-1">
               {transactions.map((tx) => {
                 const isOut = tx.senderAccountNumber === account.accountNumber;
+                const partyName = isOut
+                  ? (tx.receiverName || tx.receiverAccountNumber)
+                  : (tx.senderName || tx.senderAccountNumber);
 
                 return (
                   <li key={tx.id}>
@@ -258,7 +261,7 @@ export const DashboardPage = () => {
                       </div>
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-semibold text-navy truncate">
-                          {isOut ? `To ${tx.receiverAccountNumber}` : `From ${tx.senderAccountNumber}`}
+                          {isOut ? `To ${partyName}` : `From ${partyName}`}
                         </p>
                         <p className="text-xs text-muted mt-0.5">
                           {new Date(tx.createdAt).toLocaleDateString('en-PK', { month: 'short', day: 'numeric' })} &bull; {tx.status}

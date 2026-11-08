@@ -128,6 +128,9 @@ export const TransactionHistoryPage = () => {
         <div className="divide-y divide-border">
           {transactions.map((tx) => {
             const isOutgoing = tx.senderAccountNumber === accountNumber;
+            const partyName = isOutgoing
+              ? (tx.receiverName || tx.receiverAccountNumber)
+              : (tx.senderName || tx.senderAccountNumber);
             
             return (
               <Link 
@@ -149,7 +152,7 @@ export const TransactionHistoryPage = () => {
                 
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-semibold text-navy truncate">
-                    {isOutgoing ? `Transfer to ${tx.receiverAccountNumber}` : `Transfer from ${tx.senderAccountNumber}`}
+                    {isOutgoing ? `Transfer to ${partyName}` : `Transfer from ${partyName}`}
                   </p>
                   <div className="flex items-center gap-2 mt-0.5">
                     <p className="text-xs text-muted">

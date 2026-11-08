@@ -8,7 +8,9 @@ export interface TransferRequest {
 export interface TransactionResponse {
   id: string;
   senderAccountNumber: string;
+  senderName?: string;
   receiverAccountNumber: string;
+  receiverName?: string;
   amount: number;
   type: string;
   status: string;
